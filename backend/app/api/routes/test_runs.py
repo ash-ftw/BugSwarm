@@ -58,6 +58,7 @@ def start_test_run(
             "agent_types": payload.agent_types,
             "viewports": payload.viewports,
             "safe_mode": payload.safe_mode,
+            "max_actions": payload.max_actions,
             "queue_errors": [],
         },
     )
@@ -90,6 +91,7 @@ def start_test_run(
             "base_url": project.base_url,
             "agent_type": agent.agent_type,
             "max_depth": payload.max_depth,
+            "max_actions": payload.max_actions,
             "max_duration_minutes": payload.max_duration_minutes,
             "viewport": viewport,
             "viewport_name": viewport_name,

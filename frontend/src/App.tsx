@@ -35,10 +35,11 @@ import type { Project, ProjectPayload } from './services/projects';
 import {
   getTestRun,
   listTestRuns,
+  openTestRunEventsSocket,
   startTestRun,
   stopTestRun,
 } from './services/testRuns';
-import type { StartTestRunPayload, TestRun } from './services/testRuns';
+import type { StartTestRunPayload, TestRun, TestRunEvent } from './services/testRuns';
 import { useSystemConfig } from './services/system';
 import type { ProviderStatus } from './services/system';
 
@@ -639,6 +640,12 @@ function StartRunForm({
             <input name="max_depth" type="number" min={1} max={10} defaultValue={project.default_max_depth} />
           </label>
           <label>
+            Action limit
+            <input name="max_actions" type="number" min={1} max={500} defaultValue={40} />
+          </label>
+        </div>
+        <div className="form-grid three">
+          <label>
             Duration minutes
             <input name="max_duration_minutes" type="number" min={1} max={240} defaultValue={30} />
           </label>
@@ -665,7 +672,7 @@ function StartRunForm({
           <legend>Agent types</legend>
           {['explorer', 'form', 'navigation', 'chaos'].map((agentType) => (
             <label key={agentType}>
-              <input name="agent_types" type="checkbox" value={agentType} defaultChecked={agentType === 'explorer'} />
+              <input name="agent_types" type="checkbox" value={agentType} defaultChecked />
               {agentType}
             </label>
           ))}
@@ -702,6 +709,25 @@ function StartRunForm({
 }
 
 function RunMonitor({ run, onStop }: { run: TestRun; onStop: () => void }) {
+  const queryClient = useQueryClient();
+  const [events, setEvents] = useState<TestRunEvent[]>([]);
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'live' | 'offline'>('connecting');
+
+  useEffect(() => {
+    setEvents([]);
+    setSocketStatus('connecting');
+    const socket = openTestRunEventsSocket(run.id, (event) => {
+      setEvents((current) => [event, ...current].slice(0, 80));
+      if (event.event !== 'snapshot') {
+        queryClient.invalidateQueries({ queryKey: ['test-run', run.id] });
+      }
+    });
+    socket.onopen = () => setSocketStatus('live');
+    socket.onerror = () => setSocketStatus('offline');
+    socket.onclose = () => setSocketStatus('offline');
+    return () => socket.close();
+  }, [queryClient, run.id]);
+
   return (
     <section className="content-grid">
       <div className="panel wide">
@@ -710,6 +736,9 @@ function RunMonitor({ run, onStop }: { run: TestRun; onStop: () => void }) {
             <p className="eyebrow">Run monitor</p>
             <h2>{run.name}</h2>
           </div>
+          <span className={`status ${socketStatus === 'live' ? 'running' : socketStatus === 'offline' ? 'offline' : 'queued'}`}>
+            {socketStatus}
+          </span>
           <button className="danger-action" onClick={onStop} disabled={!['queued', 'running'].includes(run.status)}>
             <CircleStop size={18} /> Stop
           </button>
@@ -743,8 +772,8 @@ function RunMonitor({ run, onStop }: { run: TestRun; onStop: () => void }) {
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">Discovered</p>
-            <h2>Pages</h2>
+            <p className="eyebrow">Visited URLs</p>
+            <h2>Coverage</h2>
           </div>
         </div>
         <div className="page-list">
@@ -754,6 +783,24 @@ function RunMonitor({ run, onStop }: { run: TestRun; onStop: () => void }) {
               <strong>{page.title || page.url}</strong>
               <span>{page.url}</span>
               <small>{page.links_count ?? 0} links / {page.forms_count ?? 0} forms / {page.buttons_count ?? 0} buttons</small>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Live events</p>
+            <h2>Activity feed</h2>
+          </div>
+        </div>
+        <div className="event-feed">
+          {events.length === 0 && <p className="empty-state">Waiting for agent events...</p>}
+          {events.map((event, index) => (
+            <div className="event-row" key={`${event.created_at ?? index}-${event.event}-${index}`}>
+              <span className="event-kind">{event.event.replace(/_/g, ' ')}</span>
+              <strong>{event.agent_type ? `${event.agent_type} agent` : event.status ?? 'run'}</strong>
+              <small>{event.url ?? event.message ?? event.target ?? event.title ?? 'status update'}</small>
             </div>
           ))}
         </div>
@@ -1015,6 +1062,7 @@ function runPayloadFromForm(form: FormData, project: Project): StartTestRunPaylo
     name: String(form.get('name') ?? ''),
     agent_count: Number(form.get('agent_count') ?? project.default_agent_count),
     max_depth: Number(form.get('max_depth') ?? project.default_max_depth),
+    max_actions: Number(form.get('max_actions') ?? 40),
     max_duration_minutes: Number(form.get('max_duration_minutes') ?? 30),
     test_intensity: String(form.get('test_intensity') ?? project.default_test_intensity) as StartTestRunPayload['test_intensity'],
     agent_types: agentTypes.length ? agentTypes : ['explorer'],

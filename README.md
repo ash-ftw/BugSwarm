@@ -4,7 +4,7 @@ BugSwarm is an AI-powered web testing swarm. It uses browser agents to explore a
 
 ## Current Status
 
-Phase 1 through the first Phase 3 slice are in place:
+Phase 1 through the first Phase 4 slice are in place:
 
 - FastAPI backend skeleton with health and provider-status APIs.
 - SQLAlchemy model layer aligned with the documented PostgreSQL schema.
@@ -20,6 +20,9 @@ Phase 1 through the first Phase 3 slice are in place:
 - Redis/Celery-backed worker dispatch for browser agents.
 - Playwright explorer worker that crawls in-scope pages, captures screenshots, records agent steps, and persists discovered pages, page elements, console warnings/errors, and network failures.
 - Test-run launch and live polling monitor screens in the dashboard.
+- Redis pub/sub WebSocket stream for live test-run events at `/ws/test-runs/{test_run_id}`.
+- Parallel Celery worker configuration and browser-agent strategies for explorer, form, navigation, and chaos agents.
+- Live event feed and visited URL coverage panel in the test-run monitor.
 
 ## Local Setup
 
@@ -59,7 +62,7 @@ Missing hosted API keys disable only that provider. A local GPT-OSS endpoint can
 ## Next Milestones
 
 1. Add auth/profile forms for target-site login flows.
-2. Expand the worker into the Phase 4 multi-agent swarm with WebSocket run updates.
-3. Add AI test generation and LLM council bug validation.
-4. Generate bug reports, replay steps, and Playwright exports.
-5. Add retention policies for screenshots, traces, and reports.
+2. Add AI test generation and LLM council bug validation.
+3. Generate bug reports, replay steps, and Playwright exports.
+4. Add retention policies for screenshots, traces, and reports.
+5. Harden worker autoscaling, retries, and cross-agent coordination.

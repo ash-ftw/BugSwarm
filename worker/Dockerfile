@@ -11,4 +11,4 @@ RUN playwright install --with-deps chromium
 
 COPY bugswarm_worker ./bugswarm_worker
 
-CMD ["celery", "-A", "bugswarm_worker.tasks", "worker", "--loglevel=INFO", "--pool=solo"]
+CMD ["celery", "-A", "bugswarm_worker.tasks", "worker", "--loglevel=INFO", "--concurrency=4"]

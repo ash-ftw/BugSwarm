@@ -366,6 +366,18 @@ h2 {
   background: #3b2217;
 }
 
+.status.completed {
+  color: #bdeaa1;
+  background: #162d1b;
+}
+
+.status.failed,
+.status.cancelled,
+.status.offline {
+  color: #ffd0d0;
+  background: #351919;
+}
+
 .provider-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -594,7 +606,8 @@ h2 {
 }
 
 .run-table,
-.page-list {
+.page-list,
+.event-feed {
   display: grid;
   gap: 10px;
   margin-top: 18px;
@@ -631,6 +644,36 @@ h2 {
   border: 1px solid #2b3036;
   border-radius: 8px;
   background: #121518;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: 150px minmax(120px, 0.35fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 10px 12px;
+  border: 1px solid #2b3036;
+  border-radius: 8px;
+  background: #121518;
+}
+
+.event-row strong,
+.event-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-row small {
+  color: #9aa6b2;
+}
+
+.event-kind {
+  color: #b7edff;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: capitalize;
 }
 
 .checkbox-grid {
@@ -757,7 +800,8 @@ h2 {
 
   .agent-row,
   .table-row,
-  .run-row {
+  .run-row,
+  .event-row {
     grid-template-columns: 1fr;
   }
 }

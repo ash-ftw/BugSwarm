@@ -49,10 +49,28 @@ export type TestRun = {
   bugs_count: number;
 };
 
+export type TestRunEvent = {
+  event: string;
+  test_run_id: string;
+  created_at?: string;
+  agent_id?: string;
+  agent_type?: string;
+  status?: string;
+  action?: string;
+  url?: string;
+  title?: string | null;
+  message?: string;
+  target?: string | null;
+  pages_discovered?: number;
+  steps_completed?: number;
+  bugs_found?: number;
+};
+
 export type StartTestRunPayload = {
   name: string;
   agent_count: number;
   max_depth: number;
+  max_actions: number;
   max_duration_minutes: number;
   test_intensity: 'low' | 'medium' | 'high';
   agent_types: string[];
@@ -82,4 +100,23 @@ export async function getTestRun(testRunId: string) {
 export async function stopTestRun(testRunId: string) {
   const response = await api.post<TestRun>(`/test-runs/${testRunId}/stop`);
   return response.data;
+}
+
+export function openTestRunEventsSocket(testRunId: string, onEvent: (event: TestRunEvent) => void) {
+  const token = window.localStorage.getItem('bugswarm_token') ?? '';
+  const baseUrl = new URL(api.defaults.baseURL ?? 'http://localhost:8000/api', window.location.origin);
+  const wsProtocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsPath = baseUrl.pathname.replace(/\/api\/?$/, '');
+  const socketUrl = `${wsProtocol}//${baseUrl.host}${wsPath}/ws/test-runs/${testRunId}?token=${encodeURIComponent(token)}`;
+  const socket = new WebSocket(socketUrl);
+
+  socket.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as TestRunEvent);
+    } catch {
+      onEvent({ event: 'message', test_run_id: testRunId, message: message.data });
+    }
+  };
+
+  return socket;
 }

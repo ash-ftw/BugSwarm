@@ -18,10 +18,15 @@ from bugswarm_worker.db import (
     insert_discovered_page,
     insert_network_log,
     is_test_run_cancelled,
+    merge_test_run_summary,
     replace_page_elements,
     update_agent_status,
     update_test_run_status,
 )
+from bugswarm_worker.events import publish_event
+
+FORM_TERMS = ("login", "signup", "sign-up", "register", "contact", "checkout", "account", "profile", "search", "form")
+NAVIGATION_TERMS = ("home", "about", "product", "pricing", "docs", "dashboard", "cart", "shop", "menu", "category")
 
 
 async def run_explorer_agent(job: dict[str, Any]) -> None:
@@ -29,7 +34,9 @@ async def run_explorer_agent(job: dict[str, Any]) -> None:
     test_run_id = job["test_run_id"]
     agent_id = job["agent_id"]
     base_url = job["base_url"]
+    agent_type = str(job.get("agent_type") or "explorer")
     max_depth = int(job.get("max_depth", 3))
+    max_actions = int(job.get("max_actions", _default_action_limit(agent_type)))
     max_duration_seconds = max(60, int(job.get("max_duration_minutes", 30)) * 60)
     viewport = job.get("viewport", {"width": 1440, "height": 900})
     allowed_patterns = job.get("allowed_patterns", [])
@@ -38,6 +45,7 @@ async def run_explorer_agent(job: dict[str, Any]) -> None:
     deadline = time.monotonic() + max_duration_seconds
     step_order = 0
     queue: list[tuple[str, int]] = [(base_url, 0)]
+    queued: set[str] = {normalize_url(base_url, base_url)}
     visited: set[str] = set()
     network_events: list[dict[str, Any]] = []
     console_events: list[dict[str, Any]] = []
@@ -45,6 +53,16 @@ async def run_explorer_agent(job: dict[str, Any]) -> None:
     with db_connection() as connection:
         update_test_run_status(connection, test_run_id, "running")
         update_agent_status(connection, agent_id, "running", current_url=base_url)
+
+    publish_event(
+        test_run_id,
+        "agent_started",
+        {
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "message": f"{agent_type.title()} Agent started",
+        },
+    )
 
     try:
         async with async_playwright() as playwright:
@@ -59,119 +77,168 @@ async def run_explorer_agent(job: dict[str, Any]) -> None:
             page.on("requestfailed", lambda request: network_events.append(_request_failed_event(request)))
             page.on("response", lambda response: _record_failed_response(network_events, response))
 
-            while queue and time.monotonic() < deadline:
-                url, depth = queue.pop(0)
-                normalized_url = normalize_url(base_url, url)
-                if normalized_url in visited or depth > max_depth:
-                    continue
-                if not is_url_allowed(base_url, normalized_url, allowed_patterns, excluded_patterns):
-                    continue
+            try:
+                while queue and time.monotonic() < deadline and step_order < max_actions:
+                    url, depth = queue.pop(0)
+                    normalized_url = normalize_url(base_url, url)
+                    if normalized_url in visited or depth > max_depth:
+                        continue
+                    if not is_url_allowed(base_url, normalized_url, allowed_patterns, excluded_patterns):
+                        continue
 
-                with db_connection() as connection:
-                    if is_test_run_cancelled(connection, test_run_id):
-                        update_agent_status(connection, agent_id, "cancelled", completed=True)
-                        await context.close()
-                        await browser.close()
-                        return
-                    update_agent_status(connection, agent_id, "running", current_url=normalized_url)
+                    with db_connection() as connection:
+                        if is_test_run_cancelled(connection, test_run_id):
+                            update_agent_status(connection, agent_id, "cancelled", completed=True)
+                            _complete_run_if_all_agents_finished(connection, test_run_id)
+                            publish_event(
+                                test_run_id,
+                                "agent_cancelled",
+                                {"agent_id": agent_id, "agent_type": agent_type},
+                            )
+                            return
+                        update_agent_status(connection, agent_id, "running", current_url=normalized_url)
 
-                visited.add(normalized_url)
-                step_order += 1
-                started = time.perf_counter()
-                status = "passed"
-                error_message = None
-                status_code = None
-                content_hash = None
-                url_before = page.url
+                    visited.add(normalized_url)
+                    step_order += 1
+                    started = time.perf_counter()
+                    status = "passed"
+                    error_message = None
+                    status_code = None
+                    url_before = page.url
 
-                try:
-                    response = await page.goto(normalized_url, wait_until="domcontentloaded", timeout=30_000)
-                    status_code = response.status if response else None
-                except Exception as exc:
-                    status = "failed"
-                    error_message = str(exc)
-
-                if status == "passed":
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=5_000)
-                    except Exception:
-                        pass
+                        response = await page.goto(normalized_url, wait_until="domcontentloaded", timeout=30_000)
+                        status_code = response.status if response else None
+                    except Exception as exc:
+                        status = "failed"
+                        error_message = str(exc)
 
-                screenshot_path = await _capture_screenshot(page, test_run_id, agent_id, step_order)
-                page_data = await extract_page(page)
-                content = await page.content()
-                content_hash = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-                duration_ms = int((time.perf_counter() - started) * 1000)
+                    if status == "passed":
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=5_000)
+                        except Exception:
+                            pass
 
-                discovered_page_id = None
-                with db_connection() as connection:
-                    insert_agent_step(
-                        connection,
+                    screenshot_path = await _capture_screenshot(page, test_run_id, agent_id, step_order)
+                    page_data = await extract_page(page)
+                    content = await page.content()
+                    content_hash = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+
+                    with db_connection() as connection:
+                        insert_agent_step(
+                            connection,
+                            {
+                                "agent_id": agent_id,
+                                "step_order": step_order,
+                                "action_type": "goto",
+                                "target_selector": None,
+                                "target_text": None,
+                                "input_value": None,
+                                "url_before": url_before,
+                                "url_after": page.url,
+                                "status": status,
+                                "error_message": error_message,
+                                "screenshot_artifact_id": None,
+                                "dom_snapshot_artifact_id": None,
+                                "duration_ms": duration_ms,
+                            },
+                        )
+                        discovered_page_id = insert_discovered_page(
+                            connection,
+                            {
+                                "project_id": project_id,
+                                "test_run_id": test_run_id,
+                                "url": page.url,
+                                "title": page_data.get("title"),
+                                "status_code": status_code,
+                                "content_hash": content_hash,
+                                "page_type": _classify_page(page_data),
+                                "forms_count": len(page_data.get("forms", [])),
+                                "links_count": len(page_data.get("links", [])),
+                                "buttons_count": len(page_data.get("buttons", [])),
+                                "discovered_by_agent_id": agent_id,
+                            },
+                        )
+                        replace_page_elements(
+                            connection,
+                            discovered_page_id,
+                            [
+                                *page_data.get("forms", []),
+                                *page_data.get("links", []),
+                                *page_data.get("buttons", []),
+                                *page_data.get("inputs", []),
+                            ],
+                        )
+                        _flush_events(connection, test_run_id, agent_id, console_events, network_events)
+
+                    publish_event(
+                        test_run_id,
+                        "step_completed",
                         {
                             "agent_id": agent_id,
-                            "step_order": step_order,
-                            "action_type": "goto",
-                            "target_selector": None,
-                            "target_text": None,
-                            "input_value": None,
-                            "url_before": url_before,
-                            "url_after": page.url,
+                            "agent_type": agent_type,
+                            "url": page.url,
+                            "action": "goto",
                             "status": status,
-                            "error_message": error_message,
-                            "screenshot_artifact_id": None,
-                            "dom_snapshot_artifact_id": None,
-                            "duration_ms": duration_ms,
+                            "screenshot_path": screenshot_path,
                         },
                     )
-                    discovered_page_id = insert_discovered_page(
-                        connection,
+                    publish_event(
+                        test_run_id,
+                        "page_discovered",
                         {
-                            "project_id": project_id,
-                            "test_run_id": test_run_id,
+                            "agent_id": agent_id,
+                            "agent_type": agent_type,
                             "url": page.url,
                             "title": page_data.get("title"),
-                            "status_code": status_code,
-                            "content_hash": content_hash,
-                            "page_type": _classify_page(page_data),
                             "forms_count": len(page_data.get("forms", [])),
                             "links_count": len(page_data.get("links", [])),
-                            "buttons_count": len(page_data.get("buttons", [])),
-                            "discovered_by_agent_id": agent_id,
                         },
                     )
-                    replace_page_elements(
-                        connection,
-                        discovered_page_id,
-                        [
-                            *page_data.get("forms", []),
-                            *page_data.get("links", []),
-                            *page_data.get("buttons", []),
-                            *page_data.get("inputs", []),
-                        ],
-                    )
-                    _flush_events(connection, test_run_id, agent_id, console_events, network_events)
 
-                if status == "failed":
-                    continue
+                    if agent_type == "form":
+                        step_order = _record_form_steps(test_run_id, agent_id, agent_type, page.url, page_data, step_order, max_actions)
+                    elif agent_type == "chaos":
+                        step_order = _record_button_steps(test_run_id, agent_id, agent_type, page.url, page_data, step_order, max_actions)
 
-                for link in page_data.get("links", []):
-                    href = link.get("href")
-                    if not href:
+                    if status == "failed":
                         continue
-                    next_url = normalize_url(page.url, href)
-                    if next_url not in visited and is_url_allowed(base_url, next_url, allowed_patterns, excluded_patterns):
-                        queue.append((next_url, depth + 1))
 
-            await context.close()
-            await browser.close()
+                    for next_url in _candidate_urls(agent_type, page.url, page_data):
+                        if step_order >= max_actions:
+                            break
+                        if next_url in visited or next_url in queued:
+                            continue
+                        if is_url_allowed(base_url, next_url, allowed_patterns, excluded_patterns):
+                            queued.add(next_url)
+                            queue.append((next_url, depth + 1))
+            finally:
+                await context.close()
+                await browser.close()
 
         with db_connection() as connection:
             update_agent_status(connection, agent_id, "completed", completed=True)
+            publish_event(
+                test_run_id,
+                "agent_completed",
+                {"agent_id": agent_id, "agent_type": agent_type, "visited_count": len(visited)},
+            )
             _complete_run_if_all_agents_finished(connection, test_run_id)
     except Exception as exc:
         with db_connection() as connection:
             update_agent_status(connection, agent_id, "failed", error_message=str(exc), completed=True)
             update_test_run_status(connection, test_run_id, "failed", completed=True)
+            publish_event(
+                test_run_id,
+                "agent_failed",
+                {"agent_id": agent_id, "agent_type": agent_type, "message": str(exc)},
+            )
+            publish_event(
+                test_run_id,
+                "test_run_failed",
+                {"test_run_id": test_run_id, "message": str(exc)},
+            )
         raise
 
 
@@ -181,6 +248,149 @@ async def _capture_screenshot(page, test_run_id: str, agent_id: str, step_order:
     screenshot_path = screenshot_dir / f"step-{step_order:04d}.png"
     await page.screenshot(path=str(screenshot_path), full_page=True)
     return str(screenshot_path)
+
+
+def _record_form_steps(
+    test_run_id: str,
+    agent_id: str,
+    agent_type: str,
+    url: str,
+    page_data: dict[str, Any],
+    step_order: int,
+    max_actions: int,
+) -> int:
+    for form in page_data.get("forms", [])[:3]:
+        if step_order >= max_actions:
+            break
+        step_order += 1
+        _insert_inspection_step(
+            test_run_id,
+            agent_id,
+            agent_type,
+            step_order,
+            "inspect_form",
+            form.get("selector"),
+            form.get("label") or form.get("text_content"),
+            url,
+        )
+    return step_order
+
+
+def _record_button_steps(
+    test_run_id: str,
+    agent_id: str,
+    agent_type: str,
+    url: str,
+    page_data: dict[str, Any],
+    step_order: int,
+    max_actions: int,
+) -> int:
+    buttons = [
+        button
+        for button in page_data.get("buttons", [])
+        if button.get("is_visible") and button.get("is_enabled") and button.get("metadata", {}).get("type") != "submit"
+    ]
+    for button in buttons[:3]:
+        if step_order >= max_actions:
+            break
+        step_order += 1
+        _insert_inspection_step(
+            test_run_id,
+            agent_id,
+            agent_type,
+            step_order,
+            "inspect_button",
+            button.get("selector"),
+            button.get("label") or button.get("text_content"),
+            url,
+        )
+    return step_order
+
+
+def _insert_inspection_step(
+    test_run_id: str,
+    agent_id: str,
+    agent_type: str,
+    step_order: int,
+    action_type: str,
+    selector: str | None,
+    target_text: str | None,
+    url: str,
+) -> None:
+    with db_connection() as connection:
+        insert_agent_step(
+            connection,
+            {
+                "agent_id": agent_id,
+                "step_order": step_order,
+                "action_type": action_type,
+                "target_selector": selector,
+                "target_text": target_text,
+                "input_value": None,
+                "url_before": url,
+                "url_after": url,
+                "status": "passed",
+                "error_message": None,
+                "screenshot_artifact_id": None,
+                "dom_snapshot_artifact_id": None,
+                "duration_ms": 0,
+            },
+        )
+    publish_event(
+        test_run_id,
+        "step_completed",
+        {
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "url": url,
+            "action": action_type,
+            "status": "passed",
+            "target": target_text or selector,
+        },
+    )
+
+
+def _candidate_urls(agent_type: str, current_url: str, page_data: dict[str, Any]) -> list[str]:
+    links = page_data.get("links", [])
+    ordered = _prioritize_links(agent_type, links)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for link in ordered:
+        href = link.get("href")
+        if not href:
+            continue
+        url = normalize_url(current_url, href)
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _prioritize_links(agent_type: str, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if agent_type == "form":
+        return sorted(links, key=lambda link: 0 if _link_matches(link, FORM_TERMS) else 1)
+    if agent_type == "navigation":
+        return sorted(links, key=lambda link: 0 if _link_matches(link, NAVIGATION_TERMS) else 1)
+    if agent_type == "chaos":
+        return list(reversed(links))
+    return links
+
+
+def _link_matches(link: dict[str, Any], terms: tuple[str, ...]) -> bool:
+    haystack = " ".join(
+        str(link.get(key) or "").lower()
+        for key in ("href", "label", "text_content", "selector")
+    )
+    return any(term in haystack for term in terms)
+
+
+def _default_action_limit(agent_type: str) -> int:
+    return {
+        "explorer": 45,
+        "navigation": 50,
+        "form": 35,
+        "chaos": 35,
+    }.get(agent_type, 40)
 
 
 def _console_event(message) -> dict[str, Any]:
@@ -226,8 +436,11 @@ def _flush_events(connection, test_run_id: str, agent_id: str, console_events: l
         event = console_events.pop(0)
         if event.get("log_level") in {"error", "warning"}:
             insert_browser_log(connection, {"test_run_id": test_run_id, "agent_id": agent_id, **event})
+            publish_event(test_run_id, "browser_log", {"agent_id": agent_id, **event})
     while network_events:
-        insert_network_log(connection, {"test_run_id": test_run_id, "agent_id": agent_id, **network_events.pop(0)})
+        event = network_events.pop(0)
+        insert_network_log(connection, {"test_run_id": test_run_id, "agent_id": agent_id, **event})
+        publish_event(test_run_id, "network_failure", {"agent_id": agent_id, **event})
 
 
 def _classify_page(page_data: dict[str, Any]) -> str:
@@ -261,5 +474,74 @@ def _complete_run_if_all_agents_finished(connection, test_run_id: str) -> None:
         ),
         {"test_run_id": test_run_id},
     ).scalar_one()
-    if unfinished == 0:
-        update_test_run_status(connection, test_run_id, "failed" if failed else "completed", completed=True)
+    cancelled = connection.execute(
+        text(
+            """
+        SELECT COUNT(*)
+        FROM agents
+        WHERE test_run_id = :test_run_id
+          AND status = 'cancelled'
+        """
+        ),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    if unfinished != 0:
+        return
+
+    summary = _run_summary(connection, test_run_id)
+    status = "failed" if failed else "cancelled" if cancelled else "completed"
+    merge_test_run_summary(connection, test_run_id, {"completed_summary": summary})
+    update_test_run_status(connection, test_run_id, status, completed=True)
+    publish_event(
+        test_run_id,
+        "test_run_completed",
+        {
+            "test_run_id": test_run_id,
+            "status": status,
+            "bugs_found": summary["bugs_count"],
+            "pages_discovered": summary["discovered_pages_count"],
+            "steps_completed": summary["agent_steps_count"],
+        },
+    )
+
+
+def _run_summary(connection, test_run_id: str) -> dict[str, int]:
+    agents = connection.execute(
+        text("SELECT COUNT(*) FROM agents WHERE test_run_id = :test_run_id"),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    discovered_pages = connection.execute(
+        text("SELECT COUNT(*) FROM discovered_pages WHERE test_run_id = :test_run_id"),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    agent_steps = connection.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM agent_steps
+            JOIN agents ON agents.id = agent_steps.agent_id
+            WHERE agents.test_run_id = :test_run_id
+            """
+        ),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    browser_logs = connection.execute(
+        text("SELECT COUNT(*) FROM browser_logs WHERE test_run_id = :test_run_id"),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    network_logs = connection.execute(
+        text("SELECT COUNT(*) FROM network_logs WHERE test_run_id = :test_run_id"),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    bugs = connection.execute(
+        text("SELECT COUNT(*) FROM bugs WHERE test_run_id = :test_run_id"),
+        {"test_run_id": test_run_id},
+    ).scalar_one()
+    return {
+        "agent_count": int(agents),
+        "discovered_pages_count": int(discovered_pages),
+        "agent_steps_count": int(agent_steps),
+        "browser_logs_count": int(browser_logs),
+        "network_logs_count": int(network_logs),
+        "bugs_count": int(bugs),
+    }

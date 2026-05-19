@@ -16,12 +16,13 @@ class StartTestRunRequest(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     agent_count: int = Field(default=3, ge=1, le=8)
     max_depth: int = Field(default=3, ge=1, le=10)
+    max_actions: int = Field(default=40, ge=1, le=500)
     max_duration_minutes: int = Field(default=30, ge=1, le=240)
     test_intensity: TestIntensity = "medium"
-    agent_types: list[AgentType] = Field(default_factory=lambda: ["explorer"], min_length=1)
+    agent_types: list[AgentType] = Field(default_factory=lambda: ["explorer", "form", "navigation", "chaos"], min_length=1)
     viewports: list[ViewportName] = Field(default_factory=lambda: ["desktop"], min_length=1)
     llm_council_enabled: bool = True
-    llm_providers: list[str] = Field(default_factory=lambda: ["groq", "gptoss", "gemini"])
+    llm_providers: list[str] = Field(default_factory=lambda: ["groq", "gptoss", "gemini", "openrouter"])
     llm_consensus_mode: ConsensusMode = "majority_vote"
     auth_profile_id: UUID | None = None
     safe_mode: bool = True

@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.routes.ws import router as websocket_router
 from app.core.config import settings
 
 
@@ -23,6 +24,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router, prefix="/api")
+    app.include_router(websocket_router)
 
     return app
 

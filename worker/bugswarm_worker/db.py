@@ -39,6 +39,19 @@ def update_test_run_status(connection: Connection, test_run_id: str, status: str
     )
 
 
+def merge_test_run_summary(connection: Connection, test_run_id: str, summary_patch: dict[str, Any]) -> None:
+    connection.execute(
+        text(
+            """
+            UPDATE test_runs
+            SET summary = COALESCE(summary, '{}'::jsonb) || CAST(:summary_patch AS jsonb)
+            WHERE id = :test_run_id
+            """
+        ),
+        {"test_run_id": test_run_id, "summary_patch": as_jsonb(summary_patch)},
+    )
+
+
 def update_agent_status(
     connection: Connection,
     agent_id: str,
@@ -223,4 +236,3 @@ def insert_network_log(connection: Connection, values: dict[str, Any]) -> None:
         ),
         values,
     )
-
