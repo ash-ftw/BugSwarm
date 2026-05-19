@@ -1,0 +1,60 @@
+# BugSwarm
+
+BugSwarm is an AI-powered web testing swarm. It uses browser agents to explore a target web app, collect evidence, detect bugs, and prepare replayable reports. This repository is scaffolded from `BugSwarm_Complete_Documentation.md`.
+
+## Current Status
+
+Phase 1 and the first Phase 2 slice are in place:
+
+- FastAPI backend skeleton with health and provider-status APIs.
+- SQLAlchemy model layer aligned with the documented PostgreSQL schema.
+- Alembic migration setup.
+- React + TypeScript dashboard shell using Vite.
+- Worker package skeleton for scope checks, rule-based detection, LLM provider contracts, and deterministic council consensus.
+- Docker Compose stack for PostgreSQL, Redis, backend, worker, and frontend.
+- JWT registration/login APIs with PBKDF2 password hashing.
+- Owner-scoped project CRUD APIs with allowed/excluded scope rules.
+- Default Groq, GPT-OSS, and Gemini provider config records for each project.
+- Login, register, projects, create-project, project detail, and project settings screens.
+
+## Local Setup
+
+1. Copy `.env.example` to `.env` and update secrets when needed.
+2. Start infrastructure and apps:
+
+```bash
+docker compose up --build
+```
+
+3. Open:
+
+- Backend API health: `http://localhost:8000/api/health`
+- Frontend dashboard: `http://localhost:5173`
+
+## Project Layout
+
+```text
+backend/   FastAPI API, SQLAlchemy models, Alembic migrations
+frontend/  React TypeScript dashboard
+worker/    Browser-agent, LLM council, detection, and reporting worker
+storage/   Runtime screenshots, traces, and reports
+```
+
+## AI Provider Defaults
+
+The MVP keeps paid usage disabled unless configured by the user. Provider model IDs are environment-driven:
+
+- `GROQ_API_KEY`, `GROQ_MODEL`
+- `GPTOSS_BASE_URL`, `GPTOSS_MODEL`
+- `GEMINI_API_KEY`, `GEMINI_MODEL`
+- `AI_FREE_MODE`
+
+Missing hosted API keys disable only that provider. A local GPT-OSS endpoint can be used without hosted API usage.
+
+## Next Milestones
+
+1. Add auth/profile forms for target-site login flows.
+2. Add test-run creation APIs and queue-backed scheduling.
+3. Implement the first Playwright explorer agent.
+4. Persist screenshots, logs, discovered pages, and agent steps.
+5. Add bug report generation and replay export.
