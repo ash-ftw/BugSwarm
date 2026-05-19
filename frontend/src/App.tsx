@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Bot,
   Bug,
+  CircleStop,
   ChevronRight,
   Database,
   ExternalLink,
@@ -31,6 +32,13 @@ import {
   updateProject,
 } from './services/projects';
 import type { Project, ProjectPayload } from './services/projects';
+import {
+  getTestRun,
+  listTestRuns,
+  startTestRun,
+  stopTestRun,
+} from './services/testRuns';
+import type { StartTestRunPayload, TestRun } from './services/testRuns';
 import { useSystemConfig } from './services/system';
 import type { ProviderStatus } from './services/system';
 
@@ -75,7 +83,7 @@ const providers: ProviderStatus[] = [
   },
 ];
 
-type AppView = 'dashboard' | 'projects' | 'create' | 'detail' | 'settings';
+type AppView = 'dashboard' | 'projects' | 'create' | 'detail' | 'settings' | 'runs' | 'startRun' | 'runDetail';
 
 function App() {
   const queryClient = useQueryClient();
@@ -86,6 +94,7 @@ function App() {
   });
   const [view, setView] = useState<AppView>('dashboard');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const { data: systemConfig } = useSystemConfig();
   const meQuery = useQuery({
     queryKey: ['me'],
@@ -111,12 +120,28 @@ function App() {
     () => projects.find((project) => project.id === selectedProjectId) ?? projects[0] ?? null,
     [projects, selectedProjectId],
   );
+  const testRunsQuery = useQuery({
+    queryKey: ['test-runs', selectedProject?.id],
+    queryFn: () => listTestRuns(selectedProject!.id),
+    enabled: Boolean(token && selectedProject),
+    refetchInterval: 5000,
+  });
+  const selectedRunQuery = useQuery({
+    queryKey: ['test-run', selectedRunId],
+    queryFn: () => getTestRun(selectedRunId!),
+    enabled: Boolean(token && selectedRunId),
+    refetchInterval: 3000,
+  });
 
   useEffect(() => {
     if (!selectedProjectId && projects[0]) {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
+
+  useEffect(() => {
+    setSelectedRunId(null);
+  }, [selectedProject?.id]);
 
   function storeSession(nextToken: string, nextUser: User | null) {
     window.localStorage.setItem('bugswarm_token', nextToken);
@@ -136,6 +161,7 @@ function App() {
     setToken(null);
     setUser(null);
     setSelectedProjectId(null);
+    setSelectedRunId(null);
     queryClient.clear();
   }
 
@@ -143,11 +169,13 @@ function App() {
     return <AuthScreen onAuthenticated={storeSession} />;
   }
 
+  const testRuns = testRunsQuery.data ?? [];
+  const selectedRun = selectedRunQuery.data ?? testRuns.find((run) => run.id === selectedRunId) ?? testRuns[0] ?? null;
   const metrics = [
     { label: 'Projects', value: String(projects.length), detail: `${projects.filter((p) => p.status === 'active').length} active`, tone: 'neutral' },
-    { label: 'Active runs', value: '0', detail: 'Run engine pending', tone: 'running' },
-    { label: 'Open bugs', value: '0', detail: 'Bug APIs start in Phase 6', tone: 'danger' },
-    { label: 'Replay ready', value: '0', detail: 'Replay starts in Phase 7', tone: 'success' },
+    { label: 'Active runs', value: String(testRuns.filter((run) => ['queued', 'running'].includes(run.status)).length), detail: `${testRuns.length} total runs`, tone: 'running' },
+    { label: 'Pages found', value: String(testRuns.reduce((total, run) => total + run.discovered_pages_count, 0)), detail: 'Stored from agents', tone: 'success' },
+    { label: 'Open bugs', value: String(testRuns.reduce((total, run) => total + run.bugs_count, 0)), detail: 'Rule reports pending', tone: 'danger' },
   ];
 
   return (
@@ -163,7 +191,7 @@ function App() {
         <nav>
           <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')}><LayoutDashboard size={18} />Dashboard</button>
           <button className={view === 'projects' ? 'active' : ''} onClick={() => setView('projects')}><FlaskConical size={18} />Projects</button>
-          <button onClick={() => setView('dashboard')}><Activity size={18} />Test Runs</button>
+          <button className={view === 'runs' || view === 'startRun' || view === 'runDetail' ? 'active' : ''} onClick={() => setView('runs')}><Activity size={18} />Test Runs</button>
           <button onClick={() => setView('dashboard')}><Bug size={18} />Bugs</button>
           <button onClick={() => setView('dashboard')}><FileJson size={18} />Reports</button>
           <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><Settings size={18} />Settings</button>
@@ -179,7 +207,7 @@ function App() {
           <div>
             <p className="eyebrow">Swarm monitor</p>
             <h1>{viewTitle(view)}</h1>
-            <span className="user-line">{user?.name} · {user?.email}</span>
+            <span className="user-line">{user?.name} / {user?.email}</span>
           </div>
           <div className="actions">
             <button className="icon-button" title="Refresh dashboard" aria-label="Refresh dashboard" onClick={() => projectsQuery.refetch()}>
@@ -200,6 +228,7 @@ function App() {
             providers={systemConfig?.providers ?? providers}
             selectedProject={selectedProject}
             onOpenProjects={() => setView('projects')}
+            onStartRun={() => setView('startRun')}
           />
         )}
         {view === 'projects' && (
@@ -234,6 +263,34 @@ function App() {
         )}
         {view === 'settings' && selectedProject && (
           <ProjectSettings project={selectedProject} onSaved={() => setView('detail')} />
+        )}
+        {view === 'runs' && selectedProject && (
+          <TestRunsView
+            project={selectedProject}
+            testRuns={testRuns}
+            isLoading={testRunsQuery.isLoading}
+            onStart={() => setView('startRun')}
+            onOpen={(runId) => {
+              setSelectedRunId(runId);
+              setView('runDetail');
+            }}
+          />
+        )}
+        {view === 'startRun' && selectedProject && (
+          <StartRunForm
+            project={selectedProject}
+            onCancel={() => setView('runs')}
+            onStarted={(runId) => {
+              setSelectedRunId(runId);
+              setView('runDetail');
+            }}
+          />
+        )}
+        {view === 'runDetail' && selectedRun && (
+          <RunMonitor
+            run={selectedRun}
+            onStop={() => selectedRun.id && stopTestRun(selectedRun.id).then((run) => queryClient.setQueryData(['test-run', selectedRun.id], run))}
+          />
         )}
       </main>
     </div>
@@ -313,11 +370,13 @@ function DashboardView({
   providers,
   selectedProject,
   onOpenProjects,
+  onStartRun,
 }: {
   metrics: { label: string; value: string; detail: string; tone: string }[];
   providers: ProviderStatus[];
   selectedProject: Project | null;
   onOpenProjects: () => void;
+  onStartRun: () => void;
 }) {
   return (
     <>
@@ -337,7 +396,7 @@ function DashboardView({
               <p className="eyebrow">Live execution</p>
               <h2>Agent activity</h2>
             </div>
-            <button className="primary-action" disabled>
+            <button className="primary-action" onClick={onStartRun} disabled={!selectedProject}>
               <Play size={18} /> Start run
             </button>
           </div>
@@ -479,6 +538,217 @@ function ProjectsView({
             </button>
           </article>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function TestRunsView({
+  project,
+  testRuns,
+  isLoading,
+  onStart,
+  onOpen,
+}: {
+  project: Project;
+  testRuns: TestRun[];
+  isLoading: boolean;
+  onStart: () => void;
+  onOpen: (runId: string) => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Run history</p>
+          <h2>{project.name}</h2>
+        </div>
+        <button className="primary-action" onClick={onStart}>
+          <Play size={18} /> Start run
+        </button>
+      </div>
+      {isLoading && <p className="empty-state">Loading test runs...</p>}
+      {!isLoading && testRuns.length === 0 && <p className="empty-state">No test runs yet. Start a swarm run to begin automated exploration.</p>}
+      <div className="run-table">
+        {testRuns.map((run) => (
+          <button className="run-row" key={run.id} onClick={() => onOpen(run.id)}>
+            <span className={`status ${run.status}`}>{run.status}</span>
+            <strong>{run.name}</strong>
+            <span>{run.agent_count} agents</span>
+            <span>{run.discovered_pages_count} pages</span>
+            <span>{run.agent_steps_count} steps</span>
+            <ChevronRight size={18} />
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function StartRunForm({
+  project,
+  onCancel,
+  onStarted,
+}: {
+  project: Project;
+  onCancel: () => void;
+  onStarted: (runId: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (payload: StartTestRunPayload) => startTestRun(project.id, payload),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['test-runs', project.id] });
+      onStarted(result.test_run_id);
+    },
+  });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    mutation.mutate(runPayloadFromForm(new FormData(event.currentTarget), project));
+  }
+
+  return (
+    <section className="panel form-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Launch swarm</p>
+          <h2>{project.name}</h2>
+        </div>
+      </div>
+      <form className="project-form" onSubmit={submit}>
+        <label>
+          Run name
+          <input name="name" defaultValue={`Exploration - ${new Date().toLocaleDateString()}`} required minLength={2} />
+        </label>
+        <div className="form-grid three">
+          <label>
+            Agent count
+            <input name="agent_count" type="number" min={1} max={8} defaultValue={project.default_agent_count} />
+          </label>
+          <label>
+            Max depth
+            <input name="max_depth" type="number" min={1} max={10} defaultValue={project.default_max_depth} />
+          </label>
+          <label>
+            Duration minutes
+            <input name="max_duration_minutes" type="number" min={1} max={240} defaultValue={30} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Intensity
+            <select name="test_intensity" defaultValue={project.default_test_intensity}>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            Consensus mode
+            <select name="llm_consensus_mode" defaultValue={project.llm_consensus_mode}>
+              <option value="majority_vote">Majority vote</option>
+              <option value="strict_unanimous">Strict unanimous</option>
+              <option value="rule_weighted">Rule weighted</option>
+            </select>
+          </label>
+        </div>
+        <fieldset className="checkbox-grid">
+          <legend>Agent types</legend>
+          {['explorer', 'form', 'navigation', 'chaos'].map((agentType) => (
+            <label key={agentType}>
+              <input name="agent_types" type="checkbox" value={agentType} defaultChecked={agentType === 'explorer'} />
+              {agentType}
+            </label>
+          ))}
+        </fieldset>
+        <fieldset className="checkbox-grid">
+          <legend>Viewports</legend>
+          {['desktop', 'mobile', 'tablet'].map((viewport) => (
+            <label key={viewport}>
+              <input name="viewports" type="checkbox" value={viewport} defaultChecked={viewport === 'desktop'} />
+              {viewport}
+            </label>
+          ))}
+        </fieldset>
+        <div className="toggle-row">
+          <label>
+            <input name="llm_council_enabled" type="checkbox" defaultChecked={project.llm_council_enabled} />
+            LLM council
+          </label>
+          <label>
+            <input name="safe_mode" type="checkbox" defaultChecked />
+            Safe mode
+          </label>
+        </div>
+        {mutation.isError && <p className="form-error">Could not start the run. Check that Redis and the backend are available.</p>}
+        <div className="form-actions">
+          <button className="secondary-action" type="button" onClick={onCancel}>Cancel</button>
+          <button className="primary-action" type="submit" disabled={mutation.isPending}>
+            <Play size={18} /> Queue swarm
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function RunMonitor({ run, onStop }: { run: TestRun; onStop: () => void }) {
+  return (
+    <section className="content-grid">
+      <div className="panel wide">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Run monitor</p>
+            <h2>{run.name}</h2>
+          </div>
+          <button className="danger-action" onClick={onStop} disabled={!['queued', 'running'].includes(run.status)}>
+            <CircleStop size={18} /> Stop
+          </button>
+        </div>
+        <div className="detail-grid">
+          <span>Status<strong>{run.status}</strong></span>
+          <span>Agents<strong>{run.agent_count}</strong></span>
+          <span>Pages<strong>{run.discovered_pages_count}</strong></span>
+          <span>Steps<strong>{run.agent_steps_count}</strong></span>
+          <span>Console logs<strong>{run.browser_logs_count}</strong></span>
+          <span>Network logs<strong>{run.network_logs_count}</strong></span>
+        </div>
+        <div className="agent-list">
+          {run.agents.map((agent) => (
+            <div className="agent-row" key={agent.id}>
+              <div className="agent-type">
+                <Bot size={18} />
+                <div>
+                  <strong>{agent.agent_type} Agent</strong>
+                  <span>{agent.current_url ?? 'Waiting for worker'}</span>
+                </div>
+              </div>
+              <span className={`status ${agent.status}`}>{agent.status}</span>
+              <span>{agent.viewport_width ?? '-'}px</span>
+              <span>{agent.viewport_height ?? '-'}px</span>
+              <ChevronRight size={18} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Discovered</p>
+            <h2>Pages</h2>
+          </div>
+        </div>
+        <div className="page-list">
+          {run.discovered_pages.length === 0 && <p className="empty-state">No pages discovered yet.</p>}
+          {run.discovered_pages.map((page) => (
+            <div className="page-row" key={page.id}>
+              <strong>{page.title || page.url}</strong>
+              <span>{page.url}</span>
+              <small>{page.links_count ?? 0} links / {page.forms_count ?? 0} forms / {page.buttons_count ?? 0} buttons</small>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -730,6 +1000,25 @@ function projectPayloadFromForm(form: FormData): ProjectPayload {
   };
 }
 
+function runPayloadFromForm(form: FormData, project: Project): StartTestRunPayload {
+  const agentTypes = form.getAll('agent_types').map(String);
+  const viewports = form.getAll('viewports').map(String);
+  return {
+    name: String(form.get('name') ?? ''),
+    agent_count: Number(form.get('agent_count') ?? project.default_agent_count),
+    max_depth: Number(form.get('max_depth') ?? project.default_max_depth),
+    max_duration_minutes: Number(form.get('max_duration_minutes') ?? 30),
+    test_intensity: String(form.get('test_intensity') ?? project.default_test_intensity) as StartTestRunPayload['test_intensity'],
+    agent_types: agentTypes.length ? agentTypes : ['explorer'],
+    viewports: viewports.length ? viewports : ['desktop'],
+    llm_council_enabled: form.get('llm_council_enabled') === 'on',
+    llm_providers: ['groq', 'gptoss', 'gemini'],
+    llm_consensus_mode: String(form.get('llm_consensus_mode') ?? project.llm_consensus_mode) as StartTestRunPayload['llm_consensus_mode'],
+    auth_profile_id: null,
+    safe_mode: form.get('safe_mode') === 'on',
+  };
+}
+
 function splitPatterns(value: string) {
   return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
 }
@@ -744,6 +1033,12 @@ function viewTitle(view: AppView) {
       return 'Project detail';
     case 'settings':
       return 'Project settings';
+    case 'runs':
+      return 'Test runs';
+    case 'startRun':
+      return 'Start test run';
+    case 'runDetail':
+      return 'Run monitor';
     default:
       return 'Testing health overview';
   }
