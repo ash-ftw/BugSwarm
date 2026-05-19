@@ -166,6 +166,14 @@ def _create_default_provider_configs(db: Session, project_id: UUID) -> None:
         ),
         LLMProviderConfig(
             project_id=project_id,
+            provider_key="openrouter",
+            model_name=settings.openrouter_model,
+            base_url=settings.openrouter_base_url,
+            is_enabled=bool(settings.openrouter_api_key),
+            is_free_mode=settings.ai_free_mode,
+        ),
+        LLMProviderConfig(
+            project_id=project_id,
             provider_key="gemini",
             model_name=settings.gemini_model,
             base_url=None,

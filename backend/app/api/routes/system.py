@@ -17,6 +17,14 @@ def get_system_config() -> SystemConfigResponse:
             free_mode=settings.ai_free_mode,
         ),
         LLMProviderStatus(
+            provider_key="openrouter",
+            model=settings.openrouter_model,
+            base_url=settings.openrouter_base_url,
+            configured=bool(settings.openrouter_api_key),
+            enabled=bool(settings.openrouter_api_key),
+            free_mode=settings.ai_free_mode,
+        ),
+        LLMProviderStatus(
             provider_key="gptoss",
             model=settings.gptoss_model,
             base_url=settings.gptoss_base_url,

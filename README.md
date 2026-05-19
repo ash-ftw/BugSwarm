@@ -49,6 +49,7 @@ storage/   Runtime screenshots, traces, and reports
 The MVP keeps paid usage disabled unless configured by the user. Provider model IDs are environment-driven:
 
 - `GROQ_API_KEY`, `GROQ_MODEL`
+- `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`
 - `GPTOSS_BASE_URL`, `GPTOSS_MODEL`
 - `GEMINI_API_KEY`, `GEMINI_MODEL`
 - `AI_FREE_MODE`

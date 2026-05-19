@@ -19,6 +19,9 @@ class WorkerSettings(BaseSettings):
     ai_free_mode: bool = True
     groq_api_key: str = ""
     groq_model: str = "qwen/qwen3-32b"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "openrouter/auto"
     gptoss_base_url: str = "http://localhost:11434/v1"
     gptoss_model: str = "gpt-oss-20b"
     gemini_api_key: str = ""

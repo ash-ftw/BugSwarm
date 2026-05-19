@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-ProviderKey = Literal["groq", "gptoss", "gemini"]
+ProviderKey = Literal["groq", "gptoss", "gemini", "openrouter"]
 ScopeType = Literal["allow", "exclude"]
 ProjectStatus = Literal["active", "archived"]
 TestIntensity = Literal["low", "medium", "high"]

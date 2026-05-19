@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-ProviderKey = Literal["groq", "gptoss", "gemini"]
+ProviderKey = Literal["groq", "gptoss", "gemini", "openrouter"]
 ProviderVote = Literal["approve", "reject", "needs_more_evidence"]
 
 

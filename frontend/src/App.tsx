@@ -74,6 +74,14 @@ const providers: ProviderStatus[] = [
     status_label: 'Local endpoint',
   },
   {
+    provider_key: 'openrouter',
+    model: 'openrouter/auto',
+    configured: false,
+    enabled: false,
+    free_mode: true,
+    status_label: 'Needs key',
+  },
+  {
     provider_key: 'gemini',
     model: 'gemini-2.0-flash-lite',
     configured: false,
@@ -1012,7 +1020,7 @@ function runPayloadFromForm(form: FormData, project: Project): StartTestRunPaylo
     agent_types: agentTypes.length ? agentTypes : ['explorer'],
     viewports: viewports.length ? viewports : ['desktop'],
     llm_council_enabled: form.get('llm_council_enabled') === 'on',
-    llm_providers: ['groq', 'gptoss', 'gemini'],
+    llm_providers: ['groq', 'gptoss', 'gemini', 'openrouter'],
     llm_consensus_mode: String(form.get('llm_consensus_mode') ?? project.llm_consensus_mode) as StartTestRunPayload['llm_consensus_mode'],
     auth_profile_id: null,
     safe_mode: form.get('safe_mode') === 'on',
