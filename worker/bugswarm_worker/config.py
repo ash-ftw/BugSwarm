@@ -15,6 +15,11 @@ class WorkerSettings(BaseSettings):
     database_url: str = "postgresql+psycopg://bugswarm:bugswarm@localhost:5432/bugswarm"
     redis_url: str = "redis://localhost:6379/0"
     artifact_storage_root: str = "storage"
+    screenshot_retention_days: int = 90
+    trace_retention_days: int = 30
+    report_retention_days: int = 180
+    browser_log_retention_days: int = 90
+    network_log_retention_days: int = 90
 
     ai_free_mode: bool = True
     groq_api_key: str = ""

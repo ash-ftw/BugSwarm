@@ -1,4 +1,5 @@
 import { api } from './client';
+import type { AuthProfile } from './authProfiles';
 
 export type ProjectScope = {
   id: string;
@@ -9,7 +10,7 @@ export type ProjectScope = {
 
 export type LLMProviderConfig = {
   id: string;
-  provider_key: 'groq' | 'gptoss' | 'gemini';
+  provider_key: 'groq' | 'gptoss' | 'gemini' | 'openrouter';
   model_name: string;
   base_url: string | null;
   is_enabled: boolean;
@@ -33,6 +34,7 @@ export type Project = {
   free_ai_mode: boolean;
   scopes: ProjectScope[];
   llm_provider_configs: LLMProviderConfig[];
+  auth_profiles: AuthProfile[];
   created_at: string;
   updated_at: string;
 };
@@ -58,6 +60,11 @@ export async function listProjects() {
 
 export async function createProject(payload: ProjectPayload) {
   const response = await api.post<Project>('/projects', payload);
+  return response.data;
+}
+
+export async function createDemoProject() {
+  const response = await api.post<Project>('/projects/demo');
   return response.data;
 }
 

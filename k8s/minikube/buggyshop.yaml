@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buggyshop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: buggyshop
+  template:
+    metadata:
+      labels:
+        app: buggyshop
+    spec:
+      containers:
+        - name: buggyshop
+          image: bugswarm-buggyshop:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8090
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8090
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buggyshop
+spec:
+  selector:
+    app: buggyshop
+  ports:
+    - port: 8090
+      targetPort: 8090

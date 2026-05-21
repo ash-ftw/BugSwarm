@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import JWTError, jwt
+from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
 
@@ -52,3 +53,23 @@ def decode_access_token(token: str) -> str | None:
 
     subject = payload.get("sub")
     return subject if isinstance(subject, str) else None
+
+
+def encrypt_secret(value: str | None) -> str | None:
+    if not value:
+        return None
+    return _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return _fernet().decrypt(value.encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError):
+        return None
+
+
+def _fernet() -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(settings.jwt_secret.encode("utf-8")).digest())
+    return Fernet(key)

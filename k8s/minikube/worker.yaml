@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bugswarm-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bugswarm-worker
+  template:
+    metadata:
+      labels:
+        app: bugswarm-worker
+    spec:
+      containers:
+        - name: worker
+          image: bugswarm-worker:local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: bugswarm-config
+            - secretRef:
+                name: bugswarm-secret
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: bugswarm-storage

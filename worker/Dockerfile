@@ -10,5 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install --with-deps chromium
 
 COPY bugswarm_worker ./bugswarm_worker
+COPY docker-entrypoint.sh /usr/local/bin/bugswarm-worker
+RUN sed -i 's/\r$//' /usr/local/bin/bugswarm-worker && chmod +x /usr/local/bin/bugswarm-worker
 
-CMD ["celery", "-A", "bugswarm_worker.tasks", "worker", "--loglevel=INFO", "--concurrency=4"]
+CMD ["bugswarm-worker"]

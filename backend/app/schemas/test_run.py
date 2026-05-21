@@ -86,6 +86,7 @@ class TestRunRead(BaseModel):
     browser_logs_count: int = 0
     network_logs_count: int = 0
     bugs_count: int = 0
+    test_cases_count: int = 0
 
 
 class TestRunListResponse(BaseModel):

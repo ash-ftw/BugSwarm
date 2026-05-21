@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bugswarm
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - postgres.yaml
+  - redis.yaml
+  - buggyshop.yaml
+  - backend.yaml
+  - worker.yaml
+  - frontend.yaml
+  - worker-hpa.yaml

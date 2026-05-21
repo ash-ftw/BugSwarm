@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bugswarm-config
+data:
+  APP_ENV: development
+  FRONTEND_ORIGIN: http://localhost:5173
+  REDIS_URL: redis://redis:6379/0
+  ARTIFACT_STORAGE_ROOT: /app/storage
+  BUGSWARM_DEMO_BASE_URL: http://buggyshop:8090
+  AI_FREE_MODE: "true"
+  GROQ_MODEL: qwen/qwen3-32b
+  OPENROUTER_BASE_URL: https://openrouter.ai/api/v1
+  OPENROUTER_MODEL: openrouter/auto
+  GPTOSS_BASE_URL: http://localhost:11434/v1
+  GPTOSS_MODEL: gpt-oss-20b
+  GEMINI_MODEL: gemini-2.0-flash-lite
+  DEFAULT_AGENT_COUNT: "3"
+  DEFAULT_MAX_DEPTH: "3"
+  DEFAULT_MAX_DURATION_MINUTES: "30"
+  MAX_AGENT_COUNT: "8"
+  WORKER_CONCURRENCY: "2"
+  WORKER_AUTOSCALE: "6,2"
+  CELERY_LOG_LEVEL: INFO
+  CELERY_QUEUE_NAMES: celery
+  QUEUE_AUTOSCALE_TARGET_PENDING_PER_REPLICA: "4"
+  QUEUE_AUTOSCALE_MIN_WORKER_REPLICAS: "1"
+  QUEUE_AUTOSCALE_MAX_WORKER_REPLICAS: "10"
+  RUN_MIGRATIONS: "true"
+  VITE_API_BASE_URL: http://localhost:8000/api

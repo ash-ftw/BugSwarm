@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,11 +8,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.events import publish_test_run_event
 from app.core.queue import celery_app
+from app.core.security import decrypt_secret
 from app.db.session import get_db
 from app.models import (
     Agent,
     AgentStep,
+    AuthProfile,
     BrowserLog,
     Bug,
     DiscoveredPage,
@@ -20,6 +23,7 @@ from app.models import (
     Project,
     ProjectScope,
     TestRun,
+    TestCase,
     User,
 )
 from app.schemas.test_run import StartTestRunRequest, StartTestRunResponse, TestRunListResponse, TestRunRead
@@ -31,6 +35,7 @@ VIEWPORTS = {
     "tablet": {"width": 900, "height": 1100},
     "mobile": {"width": 390, "height": 844},
 }
+TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
 @router.post("/projects/{project_id}/test-runs", response_model=StartTestRunResponse, status_code=status.HTTP_201_CREATED)
@@ -44,6 +49,7 @@ def start_test_run(
     scopes = db.scalars(select(ProjectScope).where(ProjectScope.project_id == project.id)).all()
     allowed_patterns = [scope.pattern for scope in scopes if scope.scope_type == "allow"]
     excluded_patterns = [scope.pattern for scope in scopes if scope.scope_type == "exclude"]
+    auth_profile = _get_run_auth_profile(db, project.id, payload.auth_profile_id)
 
     test_run = TestRun(
         project_id=project.id,
@@ -59,6 +65,19 @@ def start_test_run(
             "viewports": payload.viewports,
             "safe_mode": payload.safe_mode,
             "max_actions": payload.max_actions,
+            "llm_council_enabled": payload.llm_council_enabled,
+            "llm_providers": payload.llm_providers,
+            "llm_consensus_mode": payload.llm_consensus_mode,
+            "auth_profile_id": str(auth_profile.id) if auth_profile else None,
+            "auth_profile_name": auth_profile.name if auth_profile else None,
+            "progress": {
+                "pages_discovered": 0,
+                "steps_completed": 0,
+                "browser_logs": 0,
+                "network_logs": 0,
+                "bugs_found": 0,
+                "status_counts": {"queued": payload.agent_count},
+            },
             "queue_errors": [],
         },
     )
@@ -98,12 +117,43 @@ def start_test_run(
             "allowed_patterns": allowed_patterns,
             "excluded_patterns": excluded_patterns,
             "safe_mode": payload.safe_mode,
+            "llm_council_enabled": payload.llm_council_enabled,
+            "llm_providers": payload.llm_providers,
+            "llm_consensus_mode": payload.llm_consensus_mode,
+            "auth_profile": _auth_profile_job_payload(auth_profile) if auth_profile else None,
         }
         try:
-            celery_app.send_task("bugswarm.run_agent", args=[job])
+            soft_limit = payload.max_duration_minutes * 60 + 30
+            hard_limit = soft_limit + 60
+            celery_app.send_task(
+                "bugswarm.run_agent",
+                args=[job],
+                soft_time_limit=soft_limit,
+                time_limit=hard_limit,
+            )
+            publish_test_run_event(
+                test_run.id,
+                "agent_queued",
+                {
+                    "agent_id": str(agent.id),
+                    "agent_type": agent.agent_type,
+                    "viewport": viewport_name,
+                    "status": agent.status,
+                },
+            )
         except Exception as exc:
             _mark_queue_error(db, test_run.id, agent.id, str(exc))
 
+    publish_test_run_event(
+        test_run.id,
+        "test_run_queued",
+        {
+            "status": test_run.status,
+            "agent_count": test_run.agent_count,
+            "max_depth": test_run.max_depth,
+            "max_duration_minutes": test_run.max_duration_minutes,
+        },
+    )
     return StartTestRunResponse(test_run_id=test_run.id, status=test_run.status)
 
 
@@ -137,18 +187,37 @@ def stop_test_run(
     current_user: User = Depends(get_current_user),
 ) -> TestRunRead:
     test_run = _get_owned_test_run(db, test_run_id, current_user.id)
-    if test_run.status in {"completed", "failed", "cancelled"}:
+    if test_run.status in TERMINAL_STATUSES:
         return _read_test_run(db, test_run)
 
     test_run.status = "cancelled"
     test_run.completed_at = datetime.utcnow()
     agents = db.scalars(select(Agent).where(Agent.test_run_id == test_run.id)).all()
     for agent in agents:
-        if agent.status in {"queued", "running"}:
+        if agent.status not in TERMINAL_STATUSES:
             agent.status = "cancelled"
             agent.completed_at = datetime.utcnow()
+            publish_test_run_event(
+                test_run.id,
+                "agent_cancelled",
+                {"agent_id": str(agent.id), "agent_type": agent.agent_type, "status": agent.status},
+            )
+    summary = dict(test_run.summary or {})
+    summary["completed_summary"] = _summary_counts(db, test_run.id, agents)
+    summary["cancelled_by_user"] = True
+    test_run.summary = summary
     db.commit()
     db.refresh(test_run)
+    publish_test_run_event(
+        test_run.id,
+        "test_run_cancelled",
+        {
+            "test_run_id": str(test_run.id),
+            "status": test_run.status,
+            "pages_discovered": summary["completed_summary"]["discovered_pages_count"],
+            "steps_completed": summary["completed_summary"]["agent_steps_count"],
+        },
+    )
     return _read_test_run(db, test_run)
 
 
@@ -170,7 +239,39 @@ def _get_owned_test_run(db: Session, test_run_id: UUID, user_id: UUID) -> TestRu
     return test_run
 
 
+def _get_run_auth_profile(db: Session, project_id: UUID, auth_profile_id: UUID | None) -> AuthProfile | None:
+    if auth_profile_id is None:
+        return None
+    auth_profile = db.scalar(
+        select(AuthProfile).where(
+            AuthProfile.id == auth_profile_id,
+            AuthProfile.project_id == project_id,
+            AuthProfile.is_active.is_(True),
+        )
+    )
+    if auth_profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Auth profile was not found.")
+    return auth_profile
+
+
+def _auth_profile_job_payload(auth_profile: AuthProfile) -> dict[str, str | bool | None]:
+    return {
+        "id": str(auth_profile.id),
+        "name": auth_profile.name,
+        "auth_type": auth_profile.auth_type,
+        "login_url": auth_profile.login_url,
+        "username_selector": auth_profile.username_selector,
+        "password_selector": auth_profile.password_selector,
+        "submit_selector": auth_profile.submit_selector,
+        "username_value": auth_profile.username_value,
+        "password_value": decrypt_secret(auth_profile.encrypted_password_value),
+        "storage_state_path": auth_profile.storage_state_path,
+        "is_active": auth_profile.is_active,
+    }
+
+
 def _read_test_run(db: Session, test_run: TestRun) -> TestRunRead:
+    _reconcile_timed_out_run(db, test_run)
     agents = db.scalars(select(Agent).where(Agent.test_run_id == test_run.id).order_by(Agent.created_at.asc())).all()
     discovered_pages = db.scalars(
         select(DiscoveredPage)
@@ -188,6 +289,7 @@ def _read_test_run(db: Session, test_run: TestRun) -> TestRunRead:
             "browser_logs_count": _count(db, BrowserLog, BrowserLog.test_run_id == test_run.id),
             "network_logs_count": _count(db, NetworkLog, NetworkLog.test_run_id == test_run.id),
             "bugs_count": _count(db, Bug, Bug.test_run_id == test_run.id),
+            "test_cases_count": _count(db, TestCase, TestCase.test_run_id == test_run.id),
         }
     )
 
@@ -211,3 +313,76 @@ def _mark_queue_error(db: Session, test_run_id: UUID, agent_id: UUID, error_mess
         agent.error_message = error_message
         agent.completed_at = datetime.utcnow()
     db.commit()
+    publish_test_run_event(
+        test_run_id,
+        "agent_failed",
+        {"agent_id": str(agent_id), "status": "failed", "message": error_message},
+    )
+    publish_test_run_event(
+        test_run_id,
+        "test_run_failed",
+        {"test_run_id": str(test_run_id), "status": "failed", "message": "Could not queue one or more agents."},
+    )
+
+
+def _reconcile_timed_out_run(db: Session, test_run: TestRun) -> None:
+    if test_run.status in TERMINAL_STATUSES:
+        return
+    reference_time = test_run.started_at or test_run.created_at
+    if reference_time is None:
+        return
+    deadline = reference_time + timedelta(minutes=test_run.max_duration_minutes, seconds=90)
+    if datetime.utcnow() <= deadline:
+        return
+
+    agents = db.scalars(select(Agent).where(Agent.test_run_id == test_run.id)).all()
+    timed_out_agents = [agent for agent in agents if agent.status not in TERMINAL_STATUSES]
+    if not timed_out_agents:
+        return
+
+    message = "Worker did not complete this agent before the run duration limit."
+    now = datetime.utcnow()
+    for agent in timed_out_agents:
+        agent.status = "failed"
+        agent.error_message = message
+        agent.completed_at = now
+        publish_test_run_event(
+            test_run.id,
+            "agent_failed",
+            {"agent_id": str(agent.id), "agent_type": agent.agent_type, "status": agent.status, "message": message},
+        )
+
+    test_run.status = "failed"
+    test_run.completed_at = now
+    summary = dict(test_run.summary or {})
+    summary["timeout"] = {
+        "message": message,
+        "deadline": deadline.isoformat(),
+        "agent_ids": [str(agent.id) for agent in timed_out_agents],
+    }
+    summary["completed_summary"] = _summary_counts(db, test_run.id, agents)
+    test_run.summary = summary
+    db.commit()
+    db.refresh(test_run)
+    publish_test_run_event(
+        test_run.id,
+        "test_run_failed",
+        {"test_run_id": str(test_run.id), "status": test_run.status, "message": message},
+    )
+
+
+def _summary_counts(db: Session, test_run_id: UUID, agents: list[Agent] | None = None) -> dict[str, int | dict[str, int]]:
+    agents = agents or db.scalars(select(Agent).where(Agent.test_run_id == test_run_id)).all()
+    status_counts: dict[str, int] = {}
+    for agent in agents:
+        status_counts[agent.status] = status_counts.get(agent.status, 0) + 1
+    return {
+        "agent_count": len(agents),
+        "discovered_pages_count": _count(db, DiscoveredPage, DiscoveredPage.test_run_id == test_run_id),
+        "agent_steps_count": _count(db, AgentStep, AgentStep.agent_id.in_([agent.id for agent in agents])) if agents else 0,
+        "browser_logs_count": _count(db, BrowserLog, BrowserLog.test_run_id == test_run_id),
+        "network_logs_count": _count(db, NetworkLog, NetworkLog.test_run_id == test_run_id),
+        "bugs_count": _count(db, Bug, Bug.test_run_id == test_run_id),
+        "test_cases_count": _count(db, TestCase, TestCase.test_run_id == test_run_id),
+        "status_counts": status_counts,
+    }

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.events import subscribe_test_run_events
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
-from app.models import Agent, Project, TestRun, User
+from app.models import Agent, AgentStep, BrowserLog, Bug, DiscoveredPage, NetworkLog, Project, TestCase, TestRun, User
 
 router = APIRouter()
 
@@ -60,10 +60,23 @@ def _snapshot_event(test_run_id: UUID) -> dict:
     with SessionLocal() as db:
         test_run = db.get(TestRun, test_run_id)
         agents = db.scalars(select(Agent).where(Agent.test_run_id == test_run_id)).all()
+        agent_ids = [agent.id for agent in agents]
+        status_counts: dict[str, int] = {}
+        for agent in agents:
+            status_counts[agent.status] = status_counts.get(agent.status, 0) + 1
         return {
             "event": "snapshot",
             "test_run_id": str(test_run_id),
             "status": test_run.status if test_run else "unknown",
+            "progress": {
+                "pages_discovered": _count(db, DiscoveredPage, DiscoveredPage.test_run_id == test_run_id),
+                "steps_completed": _count(db, AgentStep, AgentStep.agent_id.in_(agent_ids)) if agent_ids else 0,
+                "browser_logs": _count(db, BrowserLog, BrowserLog.test_run_id == test_run_id),
+                "network_logs": _count(db, NetworkLog, NetworkLog.test_run_id == test_run_id),
+                "bugs_found": _count(db, Bug, Bug.test_run_id == test_run_id),
+                "test_cases": _count(db, TestCase, TestCase.test_run_id == test_run_id),
+                "status_counts": status_counts,
+            },
             "agents": [
                 {
                     "agent_id": str(agent.id),
@@ -74,3 +87,9 @@ def _snapshot_event(test_run_id: UUID) -> dict:
                 for agent in agents
             ],
         }
+
+
+def _count(db, model: type, where_clause) -> int:
+    from sqlalchemy import func
+
+    return int(db.scalar(select(func.count()).select_from(model).where(where_clause)) or 0)

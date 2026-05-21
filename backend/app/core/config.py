@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
 
     artifact_storage_root: str = "storage"
+    screenshot_retention_days: int = 90
+    trace_retention_days: int = 30
+    report_retention_days: int = 180
+    browser_log_retention_days: int = 90
+    network_log_retention_days: int = 90
+    bugswarm_demo_base_url: str = "http://localhost:8090"
 
     ai_free_mode: bool = True
     groq_api_key: str = ""
@@ -43,12 +49,24 @@ class Settings(BaseSettings):
     default_max_depth: int = 3
     default_max_duration_minutes: int = 30
     max_agent_count: int = 8
+    celery_queue_names_raw: str = Field(default="celery", alias="CELERY_QUEUE_NAMES")
+    queue_autoscale_target_pending_per_replica: int = Field(
+        default=4,
+        alias="QUEUE_AUTOSCALE_TARGET_PENDING_PER_REPLICA",
+    )
+    queue_autoscale_min_worker_replicas: int = Field(default=1, alias="QUEUE_AUTOSCALE_MIN_WORKER_REPLICAS")
+    queue_autoscale_max_worker_replicas: int = Field(default=10, alias="QUEUE_AUTOSCALE_MAX_WORKER_REPLICAS")
 
     @property
     def cors_origins(self) -> list[str]:
         if self.cors_origins_raw:
             return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
         return [self.frontend_origin]
+
+    @property
+    def celery_queue_names(self) -> list[str]:
+        queue_names = [name.strip() for name in self.celery_queue_names_raw.split(",") if name.strip()]
+        return queue_names or ["celery"]
 
 
 @lru_cache

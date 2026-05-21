@@ -25,6 +25,17 @@ services:
       timeout: 5s
       retries: 5
 
+  buggyshop:
+    build:
+      context: ./demo/buggyshop
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -38,6 +49,8 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BUGSWARM_DEMO_BASE_URL: http://buggyshop:8090
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
     ports:
       - "8000:8000"
     volumes:
@@ -47,6 +60,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   worker:
     build:
@@ -60,12 +78,18 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BUGSWARM_DEMO_BASE_URL: http://buggyshop:8090
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_AUTOSCALE: ${WORKER_AUTOSCALE:-}
+      CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
     volumes:
       - ./storage:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
 
   frontend:
@@ -76,7 +100,13 @@ services:
     ports:
       - "5173:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   postgres_data:

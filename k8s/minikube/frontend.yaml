@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bugswarm-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bugswarm-frontend
+  template:
+    metadata:
+      labels:
+        app: bugswarm-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: bugswarm-frontend:local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: bugswarm-config
+          ports:
+            - containerPort: 5173
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5173
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bugswarm-frontend
+spec:
+  selector:
+    app: bugswarm-frontend
+  ports:
+    - port: 5173
+      targetPort: 5173

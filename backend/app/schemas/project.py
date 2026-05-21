@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.auth_profile import AuthProfileRead
+
 ProviderKey = Literal["groq", "gptoss", "gemini", "openrouter"]
 ScopeType = Literal["allow", "exclude"]
 ProjectStatus = Literal["active", "archived"]
@@ -118,6 +120,7 @@ class ProjectRead(BaseModel):
     free_ai_mode: bool
     scopes: list[ProjectScopeRead] = Field(default_factory=list)
     llm_provider_configs: list[LLMProviderConfigRead] = Field(default_factory=list)
+    auth_profiles: list[AuthProfileRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

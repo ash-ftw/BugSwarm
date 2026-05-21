@@ -1,0 +1,48 @@
+{
+  "target": "http://buggyshop:8090",
+  "run_type": "demo swarm exploration",
+  "findings": [
+    {
+      "title": "HTTP 500 response detected",
+      "severity": "high",
+      "category": "http_error",
+      "affected_url": "/checkout?empty=1",
+      "expected_result": "Checkout should handle an empty cart with a validation message.",
+      "actual_result": "The route returns HTTP 500.",
+      "replay_steps": ["Open /cart", "Click Checkout anyway"]
+    },
+    {
+      "title": "Broken link detected",
+      "severity": "medium",
+      "category": "broken_link",
+      "affected_url": "/products/ghost",
+      "expected_result": "Product links should resolve to product detail pages.",
+      "actual_result": "The product detail route returns HTTP 404.",
+      "replay_steps": ["Open /products", "Click Ghost Product"]
+    },
+    {
+      "title": "Console error detected",
+      "severity": "medium",
+      "category": "console_error",
+      "affected_url": "/products",
+      "expected_result": "Product pages should not emit console errors.",
+      "actual_result": "Inventory widget failed to hydrate."
+    },
+    {
+      "title": "Invalid email accepted",
+      "severity": "medium",
+      "category": "form_validation_failure",
+      "affected_url": "/register",
+      "expected_result": "Registration should reject malformed email values.",
+      "actual_result": "The form accepts bad-email-value."
+    },
+    {
+      "title": "Page did not become idle",
+      "severity": "medium",
+      "category": "infinite_loading",
+      "affected_url": "/orders",
+      "expected_result": "Order history should finish loading or show an empty state.",
+      "actual_result": "The spinner never resolves."
+    }
+  ]
+}

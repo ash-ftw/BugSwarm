@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bugswarm-backend-queue
+  labels:
+    app: bugswarm-backend
+spec:
+  selector:
+    matchLabels:
+      app: bugswarm-backend
+  endpoints:
+    - port: http
+      path: /api/system/queue/metrics
+      interval: 15s

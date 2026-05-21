@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import LLMProviderConfig, Project, ProjectScope, User
+from app.core.security import encrypt_secret
+from app.models import AuthProfile, LLMProviderConfig, Project, ProjectScope, User
 from app.schemas.project import ProjectCreate, ProjectListResponse, ProjectRead, ProjectUpdate
 
 router = APIRouter()
@@ -42,6 +43,47 @@ def create_project(
     db.commit()
     db.refresh(project)
 
+    return _read_project(db, project)
+
+
+@router.post("/demo", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def create_demo_project(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ProjectRead:
+    demo_name = "BuggyShop Demo"
+    demo_base_url = settings.bugswarm_demo_base_url.strip().rstrip("/")
+    project = db.scalar(select(Project).where(Project.user_id == current_user.id, Project.name == demo_name))
+    if project is None:
+        project = Project(
+            user_id=current_user.id,
+            name=demo_name,
+            description="Intentional-bug demo storefront for final BugSwarm evaluation.",
+            base_url=demo_base_url,
+            default_max_depth=3,
+            default_agent_count=4,
+            default_test_intensity="medium",
+            llm_council_enabled=True,
+            llm_consensus_mode="majority_vote",
+            free_ai_mode=True,
+        )
+        db.add(project)
+        db.flush()
+        _create_default_provider_configs(db, project.id)
+        _create_demo_auth_profile(db, project.id, demo_base_url)
+    else:
+        project.base_url = demo_base_url
+        project.status = "active"
+        project.description = "Intentional-bug demo storefront for final BugSwarm evaluation."
+        project.default_max_depth = max(project.default_max_depth, 3)
+        project.default_agent_count = max(project.default_agent_count, 4)
+        project.updated_at = datetime.utcnow()
+
+    _replace_project_scopes(db, project.id, ["/*"], ["/admin/*"])
+    if not db.scalar(select(AuthProfile).where(AuthProfile.project_id == project.id)):
+        _create_demo_auth_profile(db, project.id, demo_base_url)
+    db.commit()
+    db.refresh(project)
     return _read_project(db, project)
 
 
@@ -124,11 +166,18 @@ def _read_project(db: Session, project: Project) -> ProjectRead:
         .where(LLMProviderConfig.project_id == project.id)
         .order_by(LLMProviderConfig.provider_key.asc())
     ).all()
+    auth_profiles = db.scalars(
+        select(AuthProfile).where(AuthProfile.project_id == project.id).order_by(AuthProfile.created_at.asc())
+    ).all()
     return ProjectRead.model_validate(
         {
             **project.__dict__,
             "scopes": scopes,
             "llm_provider_configs": provider_configs,
+            "auth_profiles": [
+                {**profile.__dict__, "password_configured": bool(profile.encrypted_password_value)}
+                for profile in auth_profiles
+            ],
         }
     )
 
@@ -182,3 +231,20 @@ def _create_default_provider_configs(db: Session, project_id: UUID) -> None:
         ),
     ]
     db.add_all(configs)
+
+
+def _create_demo_auth_profile(db: Session, project_id: UUID, base_url: str) -> None:
+    db.add(
+        AuthProfile(
+            project_id=project_id,
+            name="BuggyShop Demo Login",
+            auth_type="form",
+            login_url=f"{base_url}/login",
+            username_selector='input[name="email"]',
+            password_selector='input[name="password"]',
+            submit_selector='button[type="submit"]',
+            username_value="demo@example.com",
+            encrypted_password_value=encrypt_secret("password123"),
+            is_active=True,
+        )
+    )

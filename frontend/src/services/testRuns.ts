@@ -47,6 +47,7 @@ export type TestRun = {
   browser_logs_count: number;
   network_logs_count: number;
   bugs_count: number;
+  test_cases_count: number;
 };
 
 export type TestRunEvent = {
@@ -55,15 +56,38 @@ export type TestRunEvent = {
   created_at?: string;
   agent_id?: string;
   agent_type?: string;
+  agents?: Array<{
+    agent_id: string;
+    agent_type: string;
+    status: string;
+    current_url: string | null;
+  }>;
   status?: string;
   action?: string;
   url?: string;
   title?: string | null;
   message?: string;
   target?: string | null;
+  progress?: {
+    pages_discovered?: number;
+    steps_completed?: number;
+    browser_logs?: number;
+    network_logs?: number;
+    bugs_found?: number;
+    test_cases?: number;
+    status_counts?: Record<string, number>;
+  };
+  current_url?: string;
+  end_reason?: string;
+  visited_count?: number;
+  queued_count?: number;
+  agent_steps_completed?: number;
+  agent_action_limit?: number;
+  agent_progress_percent?: number;
   pages_discovered?: number;
   steps_completed?: number;
   bugs_found?: number;
+  test_cases_created?: number;
 };
 
 export type StartTestRunPayload = {
